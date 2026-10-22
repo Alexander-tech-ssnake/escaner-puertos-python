@@ -14,14 +14,28 @@ def parsear_puertos(texto):
     return inicio, fin
 
 
+def leer_banner(s, puerto):
+    """Intenta leer el mensaje con el que se presenta el servicio."""
+    try:
+        if puerto in (80, 8000, 8080):
+            # HTTP no habla primero: hay que pedirle algo
+            s.sendall(b"HEAD / HTTP/1.0\r\n\r\n")
+        datos = s.recv(1024)
+    except OSError:
+        return ""
+    texto = datos.decode("utf-8", errors="replace").strip()
+    return texto.splitlines()[0][:80] if texto else ""
+
+
 def escanear_puerto(ip, puerto, timeout):
-    """Devuelve True si el puerto TCP acepta la conexión."""
+    """Devuelve (abierto, banner)."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(timeout)
         if s.connect_ex((ip, puerto)) != 0:
-            return False
-        # Descarta autoconexiones (el socket conectado consigo mismo)
-        return s.getsockname() != s.getpeername()
+            return False, ""
+        if s.getsockname() == s.getpeername():
+            return False, ""
+        return True, leer_banner(s, puerto)
 
 
 def main():
@@ -52,12 +66,13 @@ def main():
     abiertos = 0
     with ThreadPoolExecutor(max_workers=args.hilos) as pool:
         resultados = pool.map(
-            lambda p: (p, escanear_puerto(ip, p, args.timeout)),
+            lambda p: (p, *escanear_puerto(ip, p, args.timeout)),
             range(inicio, fin + 1),
         )
-        for puerto, abierto in resultados:
+        for puerto, abierto, banner in resultados:
             if abierto:
-                print(f"Puerto {puerto}: ABIERTO")
+                extra = f"  {banner}" if banner else ""
+                print(f"Puerto {puerto}: ABIERTO{extra}")
                 abiertos += 1
 
     print(f"Escaneo terminado: {abiertos} puerto(s) abierto(s).")
